@@ -67,7 +67,7 @@ management_menu() {
 # Function to install OpenVPN
 install_openvpn() {
     apt-get update
-    apt-get install -y openvpn easy-rsa
+    apt-get install -y openvpn easy-rsa iptables-persistent
 }
 
 # Function to validate IP address
@@ -105,6 +105,8 @@ prompt_for_ip() {
 
 # Function to configure OpenVPN
 configure_openvpn() {
+    RANDOM_PORT=$(shuf -i 65523-65535 -n1)
+
     # Set up the Easy-RSA environment
     make-cadir ~/openvpn-ca
     cd ~/openvpn-ca || exit
@@ -128,7 +130,7 @@ configure_openvpn() {
 
     # Create the server configuration file
     echo "
-    port 1194
+    port $RANDOM_PORT
     proto $1
     dev tun
     ca ca.crt
@@ -155,6 +157,43 @@ configure_openvpn() {
     # Enable and start the OpenVPN service
     systemctl enable openvpn@server
     systemctl start openvpn@server
+
+    echo "OpenVPN is configured to use port $RANDOM_PORT."
+}
+
+# Function to configure iptables for port forwarding
+configure_iptables() {
+    SERVER_PUB_NIC=$(ip route get 8.8.8.8 | awk '{print $5; exit}')
+    SERVER_TUN_NIC="tun0"
+
+    echo "Configuring iptables for port forwarding..."
+
+    # Enable IPv4 forwarding
+    echo 1 > /proc/sys/net/ipv4/ip_forward
+
+    # IPv4 iptables rules
+    iptables -A FORWARD -i ${SERVER_PUB_NIC} -o ${SERVER_TUN_NIC} -j ACCEPT
+    iptables -A FORWARD -i ${SERVER_TUN_NIC} -j ACCEPT
+    iptables -t nat -A POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE
+    iptables -t nat -A PREROUTING -i ${SERVER_PUB_NIC} -p udp --dport 1:65521 -j DNAT --to-destination ${VPN_NETWORK%.*}.2
+    iptables -t nat -A PREROUTING -i ${SERVER_PUB_NIC} -p tcp --dport 1:65521 -j DNAT --to-destination ${VPN_NETWORK%.*}.2
+
+    # Save the iptables rules
+    iptables-save > /etc/iptables/rules.v4
+
+    echo "Iptables configuration complete."
+}
+
+# Function to move SSH to a different port if necessary
+move_ssh_port() {
+    SSH_PORT=$(ss -tuln | grep ssh | awk '{print $5}' | cut -d: -f2)
+    if [[ $SSH_PORT -ge 1 && $SSH_PORT -le 65500 ]]; then
+        echo "BE ADVISED! SSH Port will be changed from ${SSH_PORT} to 65522!"
+        sed -i "s/#Port\s\+[0-9]\+/Port 65522/" /etc/ssh/sshd_config
+        sed -i "s/Port\s\+[0-9]\+/Port 65522/" /etc/ssh/sshd_config
+        systemctl restart sshd
+        echo "SSH port has been changed to 65522. Please reconnect using this port."
+    fi
 }
 
 # Function to create client configuration
@@ -165,7 +204,7 @@ create_client_config() {
     client
     dev tun
     proto $2
-    remote $SERVER_IP 1194
+    remote $SERVER_IP $3
     resolv-retry infinite
     nobind
     persist-key
@@ -196,7 +235,7 @@ create_client_config() {
 remove_openvpn() {
     systemctl stop openvpn@server
     systemctl disable openvpn@server
-    apt-get remove --purge -y openvpn easy-rsa
+    apt-get remove --purge -y openvpn easy-rsa iptables-persistent
     rm -rf /etc/openvpn
     rm -rf ~/openvpn-ca
     echo "OpenVPN and all associated files have been removed."
@@ -223,6 +262,8 @@ else
 
     install_openvpn
     configure_openvpn $PROTOCOL
+    move_ssh_port
+    configure_iptables
 
     # Ask for a client name and create client config
     echo "Enter a name for the client configuration file:"
@@ -230,7 +271,7 @@ else
 
     ./easyrsa gen-req $CLIENT_NAME nopass
     ./easyrsa sign-req client $CLIENT_NAME
-    create_client_config $CLIENT_NAME $PROTOCOL
+    create_client_config $CLIENT_NAME $PROTOCOL $RANDOM_PORT
 
     echo "OpenVPN installation and configuration completed."
 fi
