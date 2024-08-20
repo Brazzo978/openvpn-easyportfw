@@ -129,30 +129,28 @@ configure_openvpn() {
     cp pki/ca.crt pki/issued/server.crt pki/private/server.key pki/dh.pem ta.key /etc/openvpn/
 
     # Create the server configuration file
-    echo "
-    port $RANDOM_PORT
-    proto $1
-    dev tun
-    ca ca.crt
-    cert server.crt
-    key server.key
-    dh dh.pem
-    auth SHA256
-    tls-auth ta.key 0
-    topology subnet
-    server $VPN_NETWORK $VPN_SUBNET
-    push \"redirect-gateway def1 bypass-dhcp\"
-    push \"dhcp-option DNS 1.1.1.1\"
-    push \"dhcp-option DNS 1.0.0.1\"
-    keepalive 10 120
-    cipher AES-256-CBC
-    user nobody
-    group nogroup
-    persist-key
-    persist-tun
-    status openvpn-status.log
-    verb 3
-    " > /etc/openvpn/server.conf
+    echo "port $RANDOM_PORT
+proto $1
+dev tun
+ca ca.crt
+cert server.crt
+key server.key
+dh dh.pem
+auth SHA256
+tls-auth ta.key 0
+topology subnet
+server $VPN_NETWORK $VPN_SUBNET
+push \"redirect-gateway def1 bypass-dhcp\"
+push \"dhcp-option DNS 1.1.1.1\"
+push \"dhcp-option DNS 1.0.0.1\"
+keepalive 10 120
+cipher AES-256-CBC
+user nobody
+group nogroup
+persist-key
+persist-tun
+status openvpn-status.log
+verb 3" > /etc/openvpn/server.conf
 
     # Enable and start the OpenVPN service
     systemctl enable openvpn@server
@@ -196,38 +194,43 @@ move_ssh_port() {
     fi
 }
 
-# Function to create client configuration
+# Function to create client configuration with embedded certificates and keys
 create_client_config() {
     CLIENT_NAME=$1
-    SERVER_IP=$(curl -s ifconfig.me)
-    echo "
-    client
-    dev tun
-    proto $2
-    remote $SERVER_IP $3
-    resolv-retry infinite
-    nobind
-    persist-key
-    persist-tun
-    remote-cert-tls server
-    auth SHA256
-    cipher AES-256-CBC
-    setenv opt block-outside-dns
-    key-direction 1
-    verb 3
-    <ca>
-    $(cat /etc/openvpn/ca.crt)
-    </ca>
-    <cert>
-    $(cat ~/openvpn-ca/pki/issued/$CLIENT_NAME.crt)
-    </cert>
-    <key>
-    $(cat ~/openvpn-ca/pki/private/$CLIENT_NAME.key)
-    </key>
-    <tls-auth>
-    $(cat /etc/openvpn/ta.key)
-    </tls-auth>
-    " > /root/$CLIENT_NAME.ovpn
+    SERVER_IP=$(curl -s4 ifconfig.me)  # Force use of IPv4
+
+    # Generate client certificate and key
+    ./easyrsa gen-req $CLIENT_NAME nopass
+    ./easyrsa sign-req client $CLIENT_NAME
+
+    # Embed all required parts into the .ovpn file, with correct formatting
+    echo "client
+dev tun
+proto $2
+remote $SERVER_IP $3
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+remote-cert-tls server
+auth SHA256
+cipher AES-256-CBC
+setenv opt block-outside-dns
+key-direction 1
+verb 3
+<ca>
+$(cat ~/openvpn-ca/pki/ca.crt)
+</ca>
+<cert>
+$(sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' ~/openvpn-ca/pki/issued/$CLIENT_NAME.crt)
+</cert>
+<key>
+$(sed -n '/-----BEGIN PRIVATE KEY-----/,/-----END PRIVATE KEY-----/p' ~/openvpn-ca/pki/private/$CLIENT_NAME.key)
+</key>
+<tls-auth>
+$(cat /etc/openvpn/ta.key)
+</tls-auth>" > /root/$CLIENT_NAME.ovpn
+
     echo "Client configuration is available at /root/$CLIENT_NAME.ovpn"
 }
 
@@ -269,8 +272,6 @@ else
     echo "Enter a name for the client configuration file:"
     read -r CLIENT_NAME
 
-    ./easyrsa gen-req $CLIENT_NAME nopass
-    ./easyrsa sign-req client $CLIENT_NAME
     create_client_config $CLIENT_NAME $PROTOCOL $RANDOM_PORT
 
     echo "OpenVPN installation and configuration completed."
