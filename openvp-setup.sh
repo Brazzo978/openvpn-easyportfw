@@ -92,7 +92,7 @@ prompt_for_ip() {
     local default_ip="10.0.0.0"
     while true; do
         echo "It is recommended to use 10.0.0.0/24 for the VPN subnet."
-        read -rp "Enter the VPN base IP address (e.g., 10.0.0.0) [Press Enter to use $default_ip]: " VPN_IP
+        read -rp "Enter the VPN base IP address [Press Enter to use $default_ip]: " VPN_IP
         VPN_IP=${VPN_IP:-$default_ip}
         if validate_ip "$VPN_IP"; then
             break
