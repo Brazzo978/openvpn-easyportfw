@@ -89,9 +89,11 @@ validate_ip() {
 
 # Function to prompt user for IP
 prompt_for_ip() {
+    local default_ip="10.0.0.0"
     while true; do
         echo "It is recommended to use 10.0.0.0/24 for the VPN subnet."
-        read -rp "Enter the VPN base IP address (e.g., 10.0.0.0): " VPN_IP
+        read -rp "Enter the VPN base IP address (e.g., 10.0.0.0) [Press Enter to use $default_ip]: " VPN_IP
+        VPN_IP=${VPN_IP:-$default_ip}
         if validate_ip "$VPN_IP"; then
             break
         else
@@ -101,6 +103,37 @@ prompt_for_ip() {
 
     VPN_SUBNET="255.255.255.0"
     VPN_NETWORK="$VPN_IP"
+}
+
+# Function to prompt user for encryption method
+prompt_for_encryption() {
+    echo "Choose the encryption method for OpenVPN:"
+    echo "1) CHACHA20-POLY1305 (default, recommended)"
+    echo "2) AES-128-CBC"
+    echo "3) AES-256-CBC"
+    echo "4) BF-CBC (Blowfish)"
+    read -rp "Select an option [1-4]: " encryption_option
+
+    case $encryption_option in
+        1|"") # Default to CHACHA20-POLY1305 if no input
+            ENCRYPTION="CHACHA20-POLY1305"
+            ;;
+        2)
+            ENCRYPTION="AES-128-CBC"
+            ;;
+        3)
+            ENCRYPTION="AES-256-CBC"
+            ;;
+        4)
+            ENCRYPTION="BF-CBC"
+            ;;
+        *)
+            echo "Invalid option. Defaulting to CHACHA20-POLY1305."
+            ENCRYPTION="CHACHA20-POLY1305"
+            ;;
+    esac
+
+    echo "Encryption set to $ENCRYPTION"
 }
 
 # Function to configure OpenVPN
@@ -113,11 +146,11 @@ configure_openvpn() {
 
     # Build the CA
     ./easyrsa init-pki
-    ./easyrsa build-ca nopass
+    EASYRSA_BATCH=1 ./easyrsa build-ca nopass <<< "test"
 
     # Generate a certificate and key for the server
-    ./easyrsa gen-req server nopass
-    ./easyrsa sign-req server server
+    EASYRSA_CERT_EXPIRE=825 EASYRSA_BATCH=1 ./easyrsa gen-req server nopass <<< "test"
+    EASYRSA_CERT_EXPIRE=825 EASYRSA_BATCH=1 ./easyrsa sign-req server server <<< "yes"
 
     # Generate DH parameters
     ./easyrsa gen-dh
@@ -144,7 +177,9 @@ push \"redirect-gateway def1 bypass-dhcp\"
 push \"dhcp-option DNS 1.1.1.1\"
 push \"dhcp-option DNS 1.0.0.1\"
 keepalive 10 120
-cipher AES-256-CBC
+cipher $ENCRYPTION
+tun-mtu 1420
+mssfix 1380
 user nobody
 group nogroup
 persist-key
@@ -182,16 +217,13 @@ configure_iptables() {
     echo "Iptables configuration complete."
 }
 
-# Function to move SSH to a different port if necessary
+# Function to move SSH to a different port
 move_ssh_port() {
-    SSH_PORT=$(ss -tuln | grep ssh | awk '{print $5}' | cut -d: -f2)
-    if [[ $SSH_PORT -ge 1 && $SSH_PORT -le 65500 ]]; then
-        echo "BE ADVISED! SSH Port will be changed from ${SSH_PORT} to 65522!"
-        sed -i "s/#Port\s\+[0-9]\+/Port 65522/" /etc/ssh/sshd_config
-        sed -i "s/Port\s\+[0-9]\+/Port 65522/" /etc/ssh/sshd_config
-        systemctl restart sshd
-        echo "SSH port has been changed to 65522. Please reconnect using this port."
-    fi
+    echo "Moving SSH to port 65522..."
+    sed -i "s/#Port\s\+[0-9]\+/Port 65522/" /etc/ssh/sshd_config
+    sed -i "s/Port\s\+[0-9]\+/Port 65522/" /etc/ssh/sshd_config
+    systemctl restart sshd
+    echo "SSH port has been changed to 65522. Please reconnect using this port."
 }
 
 # Function to create client configuration with embedded certificates and keys
@@ -200,8 +232,8 @@ create_client_config() {
     SERVER_IP=$(curl -s4 ifconfig.me)  # Force use of IPv4
 
     # Generate client certificate and key
-    ./easyrsa gen-req $CLIENT_NAME nopass
-    ./easyrsa sign-req client $CLIENT_NAME
+    EASYRSA_CERT_EXPIRE=825 EASYRSA_BATCH=1 ./easyrsa gen-req $CLIENT_NAME nopass <<< "$CLIENT_NAME"
+    EASYRSA_CERT_EXPIRE=825 EASYRSA_BATCH=1 ./easyrsa sign-req client $CLIENT_NAME <<< "yes"
 
     # Embed all required parts into the .ovpn file, with correct formatting
     echo "client
@@ -214,7 +246,9 @@ persist-key
 persist-tun
 remote-cert-tls server
 auth SHA256
-cipher AES-256-CBC
+cipher $ENCRYPTION
+tun-mtu 1420
+mssfix 1380
 setenv opt block-outside-dns
 key-direction 1
 verb 3
@@ -262,6 +296,9 @@ else
             udp ) PROTOCOL="udp"; break;;
         esac
     done
+
+    # Ask for encryption method
+    prompt_for_encryption
 
     install_openvpn
     configure_openvpn $PROTOCOL
