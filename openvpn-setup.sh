@@ -39,8 +39,12 @@ management_menu() {
     echo "OpenVPN is already installed. What would you like to do?"
     echo "1. Check tunnel status"
     echo "2. Restart the tunnel"
-    echo "3. Remove the tunnel"
-    echo "4. Exit"
+    echo "3. Add a new client"
+    echo "4. Remove a client"
+    echo "5. List clients"
+    echo "6. Check client status"
+    echo "7. Remove everything"
+    echo "8. Exit"
     read -rp "Select an option: " option
 
     case $option in
@@ -52,9 +56,21 @@ management_menu() {
             echo "OpenVPN tunnel restarted."
             ;;
         3)
-            remove_openvpn
+            add_client
             ;;
         4)
+            remove_client
+            ;;
+        5)
+            list_clients
+            ;;
+        6)
+            check_client_status
+            ;;
+        7)
+            remove_openvpn
+            ;;
+        8)
             exit 0
             ;;
         *)
@@ -92,7 +108,7 @@ prompt_for_ip() {
     local default_ip="10.0.0.0"
     while true; do
         echo "It is recommended to use 10.0.0.0/24 for the VPN subnet."
-        read -rp "Enter the VPN base IP address [Press Enter to use $default_ip]: " VPN_IP
+        read -rp "Enter the VPN base IP address (e.g., 10.0.0.0) [Press Enter to use $default_ip]: " VPN_IP
         VPN_IP=${VPN_IP:-$default_ip}
         if validate_ip "$VPN_IP"; then
             break
@@ -103,6 +119,23 @@ prompt_for_ip() {
 
     VPN_SUBNET="255.255.255.0"
     VPN_NETWORK="$VPN_IP"
+}
+
+# Function to prompt user for MTU and calculate MSS
+prompt_for_mtu() {
+    local default_mtu="1420"
+    while true; do
+        echo "The recommended MTU value is 1420."
+        read -rp "Enter the MTU value for the tunnel (1280-1492) [Press Enter to use $default_mtu]: " TUN_MTU
+        TUN_MTU=${TUN_MTU:-$default_mtu}
+        if [[ $TUN_MTU -ge 1280 && $TUN_MTU -le 1492 ]]; then
+            MSS_FIX=$((TUN_MTU - 40))
+            echo "MTU set to $TUN_MTU and MSS Fix calculated as $MSS_FIX."
+            break
+        else
+            echo "Invalid MTU. Please enter a value between 1280 and 1492."
+        fi
+    done
 }
 
 # Function to prompt user for encryption method
@@ -178,13 +211,13 @@ push \"dhcp-option DNS 1.1.1.1\"
 push \"dhcp-option DNS 1.0.0.1\"
 keepalive 10 120
 cipher $ENCRYPTION
-tun-mtu 1420
-mssfix 1380
+tun-mtu $TUN_MTU
+mssfix $MSS_FIX
 user nobody
 group nogroup
 persist-key
 persist-tun
-status openvpn-status.log
+status /var/log/openvpn-status.log
 verb 3" > /etc/openvpn/server.conf
 
     # Enable and start the OpenVPN service
@@ -194,12 +227,12 @@ verb 3" > /etc/openvpn/server.conf
     echo "OpenVPN is configured to use port $RANDOM_PORT."
 }
 
-# Function to configure iptables for port forwarding
+# Function to configure basic iptables rules
 configure_iptables() {
     SERVER_PUB_NIC=$(ip route get 8.8.8.8 | awk '{print $5; exit}')
     SERVER_TUN_NIC="tun0"
 
-    echo "Configuring iptables for port forwarding..."
+    echo "Configuring iptables..."
 
     # Enable IPv4 forwarding
     echo 1 > /proc/sys/net/ipv4/ip_forward
@@ -224,6 +257,47 @@ move_ssh_port() {
     echo "SSH port has been changed to 65522. Please reconnect using this port."
 }
 
+# Function to create a new client
+add_client() {
+    echo "Enter a name for the client configuration file:"
+    read -r CLIENT_NAME
+
+    create_client_config "$CLIENT_NAME" "$PROTOCOL" "$RANDOM_PORT"
+    echo "Client $CLIENT_NAME has been added."
+}
+
+# Function to remove a client
+remove_client() {
+    echo "Enter the name of the client to remove:"
+    read -r CLIENT_NAME
+
+    rm -f "/etc/openvpn/easy-rsa/pki/issued/${CLIENT_NAME}.crt"
+    rm -f "/etc/openvpn/easy-rsa/pki/private/${CLIENT_NAME}.key"
+    rm -f "/etc/openvpn/easy-rsa/pki/reqs/${CLIENT_NAME}.req"
+    rm -f "/root/${CLIENT_NAME}.ovpn"
+
+    echo "Client $CLIENT_NAME has been removed."
+}
+
+# Function to list all clients
+list_clients() {
+    echo "List of clients:"
+    ls /etc/openvpn/easy-rsa/pki/issued/ | grep -v ca.crt | sed 's/.crt//'
+}
+
+# Function to check client status
+check_client_status() {
+    echo "Checking client status..."
+    while read -r client; do
+        ip=$(grep "$client" /var/log/openvpn-status.log | awk '{print $1}')
+        if [ -n "$ip" ]; then
+            echo "$client is online with IP $ip"
+        else
+            echo "$client is offline"
+        fi
+    done < <(ls /etc/openvpn/easy-rsa/pki/issued/ | grep -v ca.crt | sed 's/.crt//')
+}
+
 # Function to create client configuration with embedded certificates and keys
 create_client_config() {
     CLIENT_NAME=$1
@@ -245,8 +319,8 @@ persist-tun
 remote-cert-tls server
 auth SHA256
 cipher $ENCRYPTION
-tun-mtu 1420
-mssfix 1380
+tun-mtu $TUN_MTU
+mssfix $MSS_FIX
 setenv opt block-outside-dns
 key-direction 1
 verb 3
@@ -273,6 +347,8 @@ remove_openvpn() {
     apt-get remove --purge -y openvpn easy-rsa iptables-persistent
     rm -rf /etc/openvpn
     rm -rf ~/openvpn-ca
+    rm -rf /root/*.ovpn
+    rm -rf /etc/systemd/system/multi-user.target.wants/openvpn@server.service
     echo "OpenVPN and all associated files have been removed."
 }
 
@@ -295,6 +371,9 @@ else
         esac
     done
 
+    # Ask for MTU and calculate MSS fix
+    prompt_for_mtu
+
     # Ask for encryption method
     prompt_for_encryption
 
@@ -303,11 +382,7 @@ else
     move_ssh_port
     configure_iptables
 
-    # Ask for a client name and create client config
-    echo "Enter a name for the client configuration file:"
-    read -r CLIENT_NAME
-
-    create_client_config $CLIENT_NAME $PROTOCOL $RANDOM_PORT
-
     echo "OpenVPN installation and configuration completed."
+    echo "You can now add clients using the management menu."
+    management_menu
 fi
