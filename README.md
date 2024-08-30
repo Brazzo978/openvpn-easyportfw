@@ -3,7 +3,7 @@
 **This project is a bash script that aims to setup a Openvpn server that is specified for PERSONAL gaming or torrenting use. It supports only ONE client!**
 
 
-The script **Port Forwards** the local port 1-65521 (also icmp) to the corresponding ports on the server side. These ports covered most of the ports used by any games. **Please make sure that there is no other application using these ports on the server, otherwise It will deafen any application that listens to these ports.** I highly suggest running this script on an new empty system. 
+The script **Port Forwards** the local port 1-65521 to the corresponding ports on the server side. These ports covered most of the ports used by any games. **Please make sure that there is no other application using these ports on the server, otherwise It will deafen any application that listens to these ports.** I highly suggest running this script on an new empty system. 
 
 ## The script will move ssh to port 65522 for not losing access to the server after installation.
 
