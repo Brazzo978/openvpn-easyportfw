@@ -22,7 +22,8 @@ Supported distributions:
 
 ## Usage
 
-Download and execute the script. Answer the questions asked by the script and it will take care of the rest. For most VPS providers, you can just enter through all the questions.
+Download and execute the script. Answer the questions asked by the script and it will take care of the rest. For most VPS providers, you can just enter through all the questions, the script will ask if you want to use openvpn in tcp or udp mode , both option are gona make the scope of this tunnel , udp is really faster speedwise than tcp , tcp is more stable.
+the script will also ask for what encryption you want to use , the default suggested is what most people should use , being the fastest and lightest i tested , some client might need older encryption to work , if the chosen encryption doesnt work for you , just uninstall and reinstall the tunnel or edit manually the configuration file.
 
 ```bash
 wget https://raw.githubusercontent.com/Brazzo978/openvpn-easyportfw/main/openvpn-setup.sh
