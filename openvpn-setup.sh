@@ -208,8 +208,6 @@ configure_iptables() {
     iptables -A FORWARD -i ${SERVER_PUB_NIC} -o ${SERVER_TUN_NIC} -j ACCEPT
     iptables -A FORWARD -i ${SERVER_TUN_NIC} -j ACCEPT
     iptables -t nat -A POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE
-    iptables -t nat -A PREROUTING -i ${SERVER_PUB_NIC} -p udp --dport 1:65521 -j DNAT --to-destination ${VPN_NETWORK%.*}.2
-    iptables -t nat -A PREROUTING -i ${SERVER_PUB_NIC} -p tcp --dport 1:65521 -j DNAT --to-destination ${VPN_NETWORK%.*}.2
 
     # Save the iptables rules
     iptables-save > /etc/iptables/rules.v4
